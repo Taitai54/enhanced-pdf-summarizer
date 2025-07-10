@@ -57,6 +57,7 @@ data/
 # Temporary files
 *.pdf
 *.txt
+!requirements.txt
 *.zip
 temp_*
 
