@@ -72,6 +72,9 @@ config.json
 secrets.json
 api_keys.json
 
+# Claude configuration
+.claude/
+
 # Media files
 *.pdf
 *.mp3
