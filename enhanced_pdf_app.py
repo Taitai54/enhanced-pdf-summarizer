@@ -48,7 +48,6 @@ except ImportError:
             return self._fields.get(key, default)
     
     cgi = type('CGI', (), {'FieldStorage': FieldStorage})()
-import io
 import zipfile
 import tempfile
 from pathlib import Path

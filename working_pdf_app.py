@@ -6,7 +6,48 @@ import urllib.parse
 import os
 import PyPDF2
 import requests
-import cgi
+try:
+    import cgi
+except ImportError:
+    # For Python 3.11+ compatibility
+    import email.message
+    import email.parser
+    import io
+    import urllib.parse
+    
+    # Create a minimal cgi replacement
+    class FieldStorage:
+        def __init__(self, fp, headers, environ):
+            self._fields = {}
+            if headers.get('content-type', '').startswith('multipart/form-data'):
+                boundary = headers.get('content-type').split('boundary=')[1].strip()
+                data = fp.read()
+                self._parse_multipart(data, boundary)
+        
+        def _parse_multipart(self, data, boundary):
+            parts = data.split(f'--{boundary}'.encode())
+            for part in parts[1:-1]:  # Skip first empty and last closing parts
+                if b'\r\n\r\n' in part:
+                    header_data, content = part.split(b'\r\n\r\n', 1)
+                    headers = header_data.decode().strip()
+                    if 'name="' in headers:
+                        name = headers.split('name="')[1].split('"')[0]
+                        if 'filename="' in headers:
+                            filename = headers.split('filename="')[1].split('"')[0]
+                            self._fields[name] = type('FileField', (), {
+                                'filename': filename,
+                                'file': io.BytesIO(content.rstrip(b'\r\n'))
+                            })()
+                        else:
+                            self._fields[name] = content.decode().rstrip('\r\n')
+        
+        def __getitem__(self, key):
+            return self._fields[key]
+        
+        def getvalue(self, key, default=None):
+            return self._fields.get(key, default)
+    
+    cgi = type('CGI', (), {'FieldStorage': FieldStorage})()
 import io
 from pathlib import Path
 
