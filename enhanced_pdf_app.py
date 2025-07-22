@@ -19,27 +19,36 @@ except ImportError:
     class FieldStorage:
         def __init__(self, fp, headers, environ):
             self._fields = {}
-            if headers.get('content-type', '').startswith('multipart/form-data'):
-                boundary = headers.get('content-type').split('boundary=')[1].strip()
-                data = fp.read()
-                self._parse_multipart(data, boundary)
+            content_type = headers.get('content-type', '')
+            if content_type.startswith('multipart/form-data'):
+                try:
+                    boundary = content_type.split('boundary=')[1].strip()
+                    content_length = int(environ.get('CONTENT_LENGTH', 0))
+                    data = fp.read(content_length)
+                    self._parse_multipart(data, boundary)
+                except Exception as e:
+                    print(f"❌ Error parsing multipart data: {e}")
         
         def _parse_multipart(self, data, boundary):
-            parts = data.split(f'--{boundary}'.encode())
-            for part in parts[1:-1]:  # Skip first empty and last closing parts
-                if b'\r\n\r\n' in part:
-                    header_data, content = part.split(b'\r\n\r\n', 1)
-                    headers = header_data.decode().strip()
-                    if 'name="' in headers:
-                        name = headers.split('name="')[1].split('"')[0]
-                        if 'filename="' in headers:
-                            filename = headers.split('filename="')[1].split('"')[0]
-                            self._fields[name] = type('FileField', (), {
-                                'filename': filename,
-                                'file': io.BytesIO(content.rstrip(b'\r\n'))
-                            })()
-                        else:
-                            self._fields[name] = content.decode().rstrip('\r\n')
+            try:
+                boundary_bytes = f'--{boundary}'.encode()
+                parts = data.split(boundary_bytes)
+                for part in parts[1:-1]:  # Skip first empty and last closing parts
+                    if b'\r\n\r\n' in part:
+                        header_data, content = part.split(b'\r\n\r\n', 1)
+                        headers = header_data.decode('utf-8', errors='ignore').strip()
+                        if 'name="' in headers:
+                            name = headers.split('name="')[1].split('"')[0]
+                            if 'filename="' in headers:
+                                filename = headers.split('filename="')[1].split('"')[0]
+                                self._fields[name] = type('FileField', (), {
+                                    'filename': filename,
+                                    'file': io.BytesIO(content.rstrip(b'\r\n'))
+                                })()
+                            else:
+                                self._fields[name] = content.decode('utf-8', errors='ignore').rstrip('\r\n')
+            except Exception as e:
+                print(f"❌ Error in multipart parsing: {e}")
         
         def __getitem__(self, key):
             return self._fields[key]
@@ -484,11 +493,29 @@ class EnhancedPDFHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/summarize':
             try:
+                print("📨 Received summarize request")
+                print("📋 Headers:", dict(self.headers))
+                
+                # Read the content length
+                content_length = int(self.headers.get('Content-Length', 0))
+                print(f"📏 Content length: {content_length}")
+                
+                # Create form with explicit content length
                 form = cgi.FieldStorage(
                     fp=self.rfile,
                     headers=self.headers,
-                    environ={'REQUEST_METHOD': 'POST'}
+                    environ={
+                        'REQUEST_METHOD': 'POST',
+                        'CONTENT_LENGTH': str(content_length)
+                    }
                 )
+                
+                print("📝 Form parsing completed")
+                
+                # Check if PDF file exists in form
+                if 'pdf' not in form._fields:
+                    self.send_error_response("No PDF file found in form data")
+                    return
                 
                 pdf_file = form['pdf']
                 custom_prompt = form.getvalue('prompt', '')
@@ -499,27 +526,37 @@ class EnhancedPDFHandler(http.server.SimpleHTTPRequestHandler):
                 batch_mode = form.getvalue('batch-mode', 'individual')
                 ai_model = form.getvalue('ai-model', 'llama3.2:3b')
                 
-                if not pdf_file.filename:
+                print(f"📄 Processing file: {getattr(pdf_file, 'filename', 'Unknown')}")
+                print(f"🤖 Using model: {ai_model}")
+                
+                if not hasattr(pdf_file, 'filename') or not pdf_file.filename:
                     self.send_error_response("No file uploaded")
                     return
                 
                 # Extract text from PDF
+                print("📖 Extracting text from PDF...")
                 pdf_data = pdf_file.file.read()
                 pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_data))
                 text = ""
                 for page in pdf_reader.pages:
                     text += page.extract_text() + "\n"
                 
+                print(f"📝 Extracted {len(text)} characters from PDF")
+                
                 if not text.strip():
                     self.send_error_response("No text found in PDF")
                     return
                 
                 # Create enhanced summary prompt
+                print("🔨 Creating enhanced prompt...")
                 prompt = self.create_enhanced_prompt(text, custom_prompt, summary_length, 
                                                   custom_word_count, summary_style)
                 
+                print(f"📤 Sending to Ollama (prompt length: {len(prompt)})")
                 # Send to Ollama
                 summary = self.generate_summary(prompt, ai_model)
+                print(f"📥 Received summary: {len(summary) if summary else 0} characters")
+                
                 if not summary:
                     self.send_error_response("Could not generate summary")
                     return
@@ -527,8 +564,10 @@ class EnhancedPDFHandler(http.server.SimpleHTTPRequestHandler):
                 # Create downloadable file if requested
                 download_url = None
                 if output_format in ['pdf', 'both']:
+                    print("📄 Creating PDF summary...")
                     download_url = self.create_pdf_summary(pdf_file.filename, summary)
                 
+                print("✅ Sending success response")
                 self.send_json_response({
                     "status": "success", 
                     "summary": summary,
@@ -536,6 +575,7 @@ class EnhancedPDFHandler(http.server.SimpleHTTPRequestHandler):
                 })
                 
             except Exception as e:
+                print(f"❌ Error in summarize: {str(e)}")
                 self.send_error_response(f"Error processing PDF: {str(e)}")
                 
         elif self.path == '/download-batch':
@@ -652,6 +692,7 @@ class EnhancedPDFHandler(http.server.SimpleHTTPRequestHandler):
         
         for url in ollama_urls:
             try:
+                print(f"🔗 Trying Ollama URL: {url}")
                 response = requests.post(f"{url}/api/generate", 
                     json={
                         "model": model,
@@ -661,11 +702,20 @@ class EnhancedPDFHandler(http.server.SimpleHTTPRequestHandler):
                     timeout=300
                 )
                 
+                print(f"📡 HTTP Status: {response.status_code}")
+                
                 if response.status_code == 200:
-                    return response.json().get('response', '')
-            except Exception:
+                    result = response.json().get('response', '')
+                    print(f"✅ Got response from {url}: {len(result)} characters")
+                    return result
+                else:
+                    print(f"❌ HTTP Error {response.status_code}: {response.text}")
+                    
+            except Exception as e:
+                print(f"❌ Exception with {url}: {str(e)}")
                 continue
         
+        print("❌ All Ollama URLs failed")
         return None
 
     def create_pdf_summary(self, original_filename, summary):
