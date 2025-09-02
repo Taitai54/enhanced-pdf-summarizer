@@ -1,4 +1,42 @@
 #!/usr/bin/env python3
+"""
+Enhanced PDF Summarizer Web Application
+
+This is a comprehensive web-based PDF processing application that provides AI-powered 
+document summarization with advanced features:
+
+CORE FUNCTIONALITY:
+- Batch processing of multiple PDF files simultaneously
+- AI-powered text summarization using Ollama (local LLM)
+- Multiple output formats (text, PDF, combined documents)
+- Customizable summary styles and lengths
+- Web-based interface with real-time progress tracking
+
+KEY FEATURES:
+- Multi-file upload and processing
+- Configurable summary parameters (length, style, custom instructions)
+- Support for multiple AI models via Ollama integration
+- PDF generation with professional formatting
+- Batch download options (individual files or ZIP archives)
+- Cross-platform compatibility with fallback CGI implementation
+- Real-time status monitoring and progress bars
+
+TECHNICAL COMPONENTS:
+- HTTP server with custom request handlers
+- PDF text extraction using PyPDF2
+- AI integration with Ollama API (supports multiple endpoints)
+- PDF generation using ReportLab
+- File management with temporary storage
+- Modern web interface with JavaScript frontend
+
+USAGE:
+Run the script to start a local web server on port 8511, then access via browser
+to upload PDFs and generate customized summaries using local AI models.
+
+Dependencies: PyPDF2, requests, reportlab, ollama (running locally)
+Author: Enhanced PDF processing system
+"""
+
 import http.server
 import socketserver
 import json
@@ -22,6 +60,49 @@ except ImportError:
             content_type = headers.get('content-type', '')
             if content_type.startswith('multipart/form-data'):
                 try:
+                    boundary = content_type.split('boundary=')[1].strip()
+                    content_length = int(environ.get('CONTENT_LENGTH', 0))
+                    data = fp.read(content_length)
+                    self._parse_multipart(data, boundary)
+                except Exception as e:
+                    print(f"❌ Error parsing multipart data: {e}")
+        
+        def _parse_multipart(self, data, boundary):
+            try:
+                boundary_bytes = f'--{boundary}'.encode()
+                parts = data.split(boundary_bytes)
+                for part in parts[1:-1]:  # Skip first empty and last closing parts
+                    if b'\r\n\r\n' in part:
+                        header_data, content = part.split(b'\r\n\r\n', 1)
+                        headers = header_data.decode('utf-8', errors='ignore').strip()
+                        if 'name="' in headers:
+                            name = headers.split('name="')[1].split('"')[0]
+                            if 'filename="' in headers:
+                                filename = headers.split('filename="')[1].split('"')[0]
+                                self._fields[name] = type('FileField', (), {
+                                    'filename': filename,
+                                    'file': io.BytesIO(content.rstrip(b'\r\n'))
+                                })()
+                            else:
+                                self._fields[name] = content.decode('utf-8', errors='ignore').rstrip('\r\n')
+            except Exception as e:
+                print(f"❌ Error in multipart parsing: {e}")
+        
+        def __getitem__(self, key):
+            return self._fields[key]
+        
+        def getvalue(self, key, default=None):
+            return self._fields.get(key, default)
+    
+    cgi = type('CGI', (), {'FieldStorage': FieldStorage})()
+import zipfile
+import tempfile
+from pathlib import Path
+from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
                     boundary = content_type.split('boundary=')[1].strip()
                     content_length = int(environ.get('CONTENT_LENGTH', 0))
                     data = fp.read(content_length)
